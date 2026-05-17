@@ -8,8 +8,16 @@ from langgraph.graph import StateGraph, END
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 
+from tavily import TavilyClient
+
 
 load_dotenv()
+
+
+# -----------------------------
+# Tavily Client
+# -----------------------------
+tavily = TavilyClient()
 
 
 # -----------------------------
@@ -20,6 +28,7 @@ class GraphState(TypedDict):
     documents: List[str]
     generation: str
     retries: int
+    hallucination_check: str
 
 
 # -----------------------------
@@ -89,10 +98,10 @@ Question:
 Document:
 {doc}
 
-If the document is relevant to the question, respond only with:
+If the document is relevant to the question, respond ONLY with:
 yes
 
-Otherwise respond only with:
+Otherwise respond ONLY with:
 no
 """
 
@@ -124,7 +133,7 @@ def decide_to_generate(state: GraphState):
     if len(docs) == 0:
 
         if retries >= 1:
-            return "generate"
+            return "websearch"
 
         return "retry"
 
@@ -141,19 +150,53 @@ def rewrite_query(state: GraphState):
     question = state["question"]
 
     prompt = f"""
-Rewrite this question to improve document retrieval:
+Rewrite this question in ONE short sentence for better retrieval.
 
+Question:
 {question}
+
+Only return the rewritten query.
 """
 
     response = llm.invoke(prompt)
 
-    better_question = response.content.strip()
+    better_question = response.content.strip()[:200]
 
     return {
         "question": better_question,
         "documents": [],
         "retries": state.get("retries", 0) + 1
+    }
+
+
+# -----------------------------
+# Web Search Node
+# -----------------------------
+def web_search(state: GraphState):
+
+    print("\n---WEB SEARCH FALLBACK---\n")
+
+    question = state["question"][:200]
+
+    response = tavily.search(
+        query=question,
+        max_results=3
+    )
+
+    results = response["results"]
+
+    web_docs = []
+
+    for result in results:
+
+        content = result.get("content", "")
+
+        web_docs.append(content)
+
+    return {
+        "question": question,
+        "documents": web_docs,
+        "retries": state.get("retries", 0)
     }
 
 
@@ -197,6 +240,76 @@ If the context is empty, say you do not have enough information.
 
 
 # -----------------------------
+# Hallucination Check Node
+# -----------------------------
+def check_hallucination(state: GraphState):
+
+    print("\n---CHECKING HALLUCINATIONS---\n")
+
+    question = state["question"]
+
+    docs = state["documents"]
+
+    generation = state["generation"]
+
+    combined_docs = "\n\n".join(docs)
+
+    prompt = f"""
+You are a hallucination detection system.
+
+Question:
+{question}
+
+Retrieved Context:
+{combined_docs}
+
+Generated Answer:
+{generation}
+
+Determine whether the generated answer is fully supported by the retrieved context.
+
+Respond ONLY with:
+yes
+
+or
+
+no
+"""
+
+    response = llm.invoke(prompt)
+
+    result = response.content.strip().lower()
+
+    return {
+        "question": question,
+        "documents": docs,
+        "generation": generation,
+        "retries": state.get("retries", 0),
+        "hallucination_check": result
+    }
+
+
+# -----------------------------
+# Hallucination Decision Node
+# -----------------------------
+def decide_hallucination(state: GraphState):
+
+    print("\n---HALLUCINATION DECISION---\n")
+
+    check = state["hallucination_check"]
+
+    retries = state.get("retries", 0)
+
+    if check == "yes":
+        return "approved"
+
+    if retries >= 2:
+        return "approved"
+
+    return "retry"
+
+
+# -----------------------------
 # Build Graph
 # -----------------------------
 graph_builder = StateGraph(GraphState)
@@ -207,7 +320,11 @@ graph_builder.add_node("grade_documents", grade_documents)
 
 graph_builder.add_node("rewrite_query", rewrite_query)
 
+graph_builder.add_node("web_search", web_search)
+
 graph_builder.add_node("generate", generate)
+
+graph_builder.add_node("check_hallucination", check_hallucination)
 
 graph_builder.set_entry_point("retrieve")
 
@@ -218,13 +335,25 @@ graph_builder.add_conditional_edges(
     decide_to_generate,
     {
         "generate": "generate",
-        "retry": "rewrite_query"
+        "retry": "rewrite_query",
+        "websearch": "web_search"
     }
 )
 
 graph_builder.add_edge("rewrite_query", "retrieve")
 
-graph_builder.add_edge("generate", END)
+graph_builder.add_edge("web_search", "generate")
+
+graph_builder.add_edge("generate", "check_hallucination")
+
+graph_builder.add_conditional_edges(
+    "check_hallucination",
+    decide_hallucination,
+    {
+        "approved": END,
+        "retry": "rewrite_query"
+    }
+)
 
 graph = graph_builder.compile()
 
@@ -235,7 +364,7 @@ graph = graph_builder.compile()
 if __name__ == "__main__":
 
     result = graph.invoke({
-        "question": "What is FastAPI?",
+        "question": "How does Kubernetes scheduling work?",
         "retries": 0
     })
 
