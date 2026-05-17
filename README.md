@@ -1,26 +1,34 @@
 # RAG-Based Technical Documentation Assistant
 
-This project is a Retrieval-Augmented Generation (RAG) based technical documentation assistant built using LangGraph, FastAPI, ChromaDB, and Groq LLMs.
+This project is a Retrieval-Augmented Generation (RAG) based technical documentation assistant built using LangGraph, FastAPI, ChromaDB, Groq LLMs, and Tavily Search.
 
-The system allows users to query technical documentation using natural language. It retrieves relevant document chunks from a vector database, grades their relevance using an LLM, and generates grounded answers using a LangGraph workflow.
+The system answers technical questions by retrieving relevant documentation chunks from a vector database, grading their relevance using an LLM, generating grounded answers, validating generated responses for hallucinations, and falling back to web search when local retrieval fails.
 
-## Features
+The project implements a self-corrective and self-reflective RAG workflow inspired by Self-RAG and Corrective RAG (CRAG).
+
+---
+
+# Features
 
 - Document ingestion pipeline
 - Markdown document loading
 - Recursive text chunking
 - Embedding generation using sentence-transformers
 - ChromaDB vector storage
-- Semantic document retrieval
+- Semantic retrieval
 - LangGraph workflow orchestration
 - LLM-based document relevance grading
 - Query rewriting and retry logic
+- Hallucination detection node
+- Tavily web-search fallback
 - FastAPI backend
 - Dynamic document ingestion endpoint
 - Feedback endpoint
-- Source-aware answer generation
+- Source-grounded answer generation
 
-## Tech Stack
+---
+
+# Tech Stack
 
 - Python
 - LangGraph
@@ -29,9 +37,12 @@ The system allows users to query technical documentation using natural language.
 - ChromaDB
 - HuggingFace Embeddings
 - Groq LLM API
+- Tavily Search API
 - Sentence Transformers
 
-## Project Structure
+---
+
+# Project Structure
 
 ```text
 tech-assist/
@@ -50,7 +61,9 @@ tech-assist/
 └── .env
 ```
 
-## Workflow Architecture
+---
+
+# Workflow Architecture
 
 ```text
 User Query
@@ -64,11 +77,23 @@ Relevant Documents Found?
  Yes                     No
  ↓                        ↓
 Generate Answer       Rewrite Query
-                           ↓
-                     Retrieve Again
+ ↓                        ↓
+Hallucination Check   Retrieve Again
+ ↓                        ↓
+Approved?           Still No Results?
+ /     \                  /      \
+Yes     No             Yes       No
+ ↓       ↓              ↓         ↓
+Return   Retry      Web Search   Retry
+            ↓            ↓
+        Retrieve      Generate
 ```
 
-## Document Ingestion Pipeline
+---
+
+# System Components
+
+## 1. Document Ingestion Pipeline
 
 The ingestion pipeline performs the following steps:
 
@@ -83,66 +108,145 @@ Run ingestion using:
 python app/ingest.py
 ```
 
-## Setup Instructions
+---
 
-### Clone Repository
+## 2. Retrieval System
+
+The system converts user queries into embeddings and retrieves semantically similar chunks from ChromaDB.
+
+Retriever behavior includes:
+- semantic similarity search
+- top-k retrieval
+- document filtering through relevance grading
+
+---
+
+## 3. Self-Corrective LangGraph Workflow
+
+The system uses LangGraph StateGraph to implement a graph-based RAG workflow.
+
+The workflow includes:
+- retrieval node
+- document grading node
+- query rewriting node
+- web-search fallback node
+- generation node
+- hallucination checking node
+
+Conditional routing is used to dynamically decide the next step based on retrieval quality and hallucination verification.
+
+---
+
+# Hallucination Checking
+
+The system includes a hallucination detection node inspired by Self-RAG.
+
+After answer generation, the generated response is verified against the retrieved context using an LLM.
+
+If the answer is not sufficiently grounded in the retrieved context:
+- the workflow retries retrieval
+- or falls back to web search
+
+This improves answer reliability and reduces unsupported responses.
+
+---
+
+# Web Search Fallback
+
+If the vector store cannot retrieve sufficiently relevant documents, the workflow falls back to Tavily web search.
+
+The retrieved web results are then used as additional context for answer generation.
+
+This improves robustness for:
+- unseen queries
+- out-of-domain questions
+- incomplete local documentation corpora
+
+---
+
+# Setup Instructions
+
+## Clone Repository
 
 ```bash
 git clone <your-repository-url>
 cd tech-assist
 ```
 
-### Create Virtual Environment
+---
+
+## Create Virtual Environment
 
 ```bash
 python -m venv venv
 ```
 
-### Activate Environment
+---
 
-Windows:
+## Activate Environment
+
+### Windows
 
 ```bash
 venv\Scripts\activate
 ```
 
-Linux/Mac:
+### Linux/Mac
 
 ```bash
 source venv/bin/activate
 ```
 
-### Install Dependencies
+---
+
+## Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Environment Variables
+---
+
+# Environment Variables
 
 Create a `.env` file in the project root:
 
 ```env
 GROQ_API_KEY=your_api_key_here
+TAVILY_API_KEY=your_api_key_here
 ```
 
-## Running the Application
+---
 
-### Step 1: Ingest Documents
+# Running the Application
+
+## Step 1: Ingest Documents
 
 ```bash
 python app/ingest.py
 ```
 
-### Step 2: Run FastAPI Server
+---
+
+## Step 2: Run FastAPI Server
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-## API Endpoints
+---
 
-### POST `/query`
+## Step 3: Open Swagger UI
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+---
+
+# API Endpoints
+
+## POST `/query`
 
 Submit a question to the RAG assistant.
 
@@ -154,11 +258,15 @@ Example request:
 }
 ```
 
-### GET `/documents`
+---
+
+## GET `/documents`
 
 Lists indexed documents from the corpus.
 
-### POST `/feedback`
+---
+
+## POST `/feedback`
 
 Submit feedback on generated answers.
 
@@ -173,70 +281,125 @@ Example request:
 }
 ```
 
-### POST `/ingest`
+---
+
+## POST `/ingest`
 
 Upload and ingest new markdown documents dynamically.
 
-## Design Decisions
+---
 
-### Why LangGraph
+# Design Decisions
 
-LangGraph was chosen because it allows stateful graph-based workflows with conditional routing. This makes it suitable for implementing self-corrective RAG pipelines.
+## Why LangGraph
 
-### Why ChromaDB
+LangGraph was chosen because it allows stateful graph-based workflows with conditional routing. This makes it suitable for implementing self-corrective and adaptive RAG pipelines.
+
+---
+
+## Why ChromaDB
 
 ChromaDB was selected because it is lightweight, easy to set up locally, and integrates well with LangChain.
 
-### Why HuggingFace Embeddings
+---
+
+## Why HuggingFace Embeddings
 
 The `all-MiniLM-L6-v2` embedding model was chosen because it is lightweight, fast, and sufficient for small-scale semantic retrieval tasks.
 
-### Why Groq
+---
+
+## Why Groq
 
 Groq provides fast inference with free API access, making it suitable for rapid prototyping and experimentation.
 
-## Tradeoffs
+---
 
-### Simplicity vs Accuracy
+## Why Tavily
 
-The project prioritizes simplicity and readability over production-level optimization. The current implementation is lightweight and easy to understand but may not perform as well on large-scale corpora.
+Tavily was selected because it is optimized for AI workflows and provides clean web-search results suitable for RAG systems.
 
-### Small Embedding Model
+---
 
-A lightweight embedding model was used to reduce computational overhead and improve speed. Larger embedding models may improve retrieval quality at the cost of latency and resource usage.
+# Tradeoffs
 
-### Basic Relevance Grading
+## Simplicity vs Accuracy
 
-Document grading currently uses a simple yes/no relevance classification. More advanced grading mechanisms or reranking systems could improve retrieval precision.
+The project prioritizes simplicity, readability, and modularity over production-scale optimization. The current implementation is lightweight and easy to understand but may not perform optimally on extremely large corpora.
 
-### Local Vector Database
+---
 
-ChromaDB runs locally for simplicity and ease of setup. A production deployment would likely use a managed vector database for scalability and persistence.
+## Lightweight Embedding Model
 
-### Limited Retry Logic
+A smaller embedding model was used to reduce computational overhead and improve speed. Larger embedding models could improve retrieval accuracy at the cost of higher latency and memory usage.
 
-The workflow currently uses a simple retry mechanism with query rewriting. More advanced adaptive retrieval strategies or web search fallback mechanisms could improve robustness.
+---
 
-## Future Improvements
+## Basic Relevance Grading
 
-- Add hallucination checking
+Document grading currently uses a binary yes/no classification. More advanced reranking models or confidence-based retrieval systems could improve precision.
+
+---
+
+## LLM-Based Hallucination Checking
+
+Hallucination detection relies on another LLM evaluation step. While useful, this approach may still occasionally misclassify grounded or hallucinated responses.
+
+---
+
+## Local Vector Database
+
+ChromaDB runs locally for simplicity and ease of setup. A production deployment would likely use a distributed vector database for scalability and persistence.
+
+---
+
+## Limited Retry Strategy
+
+The workflow currently uses a simple retry and rewrite strategy. More advanced adaptive retrieval planning could improve robustness further.
+
+---
+
+## Web Search Dependency
+
+Web-search fallback improves robustness but introduces external API dependency, latency, and potential variability in retrieved results.
+
+---
+
+# Future Improvements
+
 - Add conversational memory
-- Add web search fallback
 - Add reranking models
+- Add citation extraction
+- Add streaming responses
 - Add authentication and session handling
 - Add frontend UI using Streamlit or React
 - Add persistent feedback storage
+- Add multi-document source attribution
+- Add agentic tool-use capabilities
+- Add caching for retrieval and web search
 
-## Example Query
+---
 
-Question:
+# Example Queries
 
 ```text
 What is FastAPI?
 ```
 
-Example Response:
+```text
+How does Kubernetes scheduling work?
+```
+
+---
+
+# Example Response
 
 ```text
 FastAPI is a modern Python web framework used for building APIs quickly and efficiently.
 ```
+
+---
+
+# Author
+
+Nikhil George
